@@ -2,7 +2,7 @@
 okteto Desktop
 
 
-##配置
+## 配置
 
 A. 在Linux VPS的Terminal上安装配置命令：
 
@@ -14,7 +14,7 @@ apt install npm
 
 sudo npm install -g wstunnel
 --------------------------提前准备----------------------------------
-###可能有用
+### 可能有用
 4. 项目安装成功后本地终端进行配置：
 
 wstunnel -t 1234:127.0.0.1:22 wss://你在okteto上新建项目的网址/ &
