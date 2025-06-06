@@ -354,6 +354,7 @@ namespace secp256k1 {
 
 	bool isPointAtInfinity(const ecpoint &p);
 	ecpoint multiplyPoint(const uint256 &k, const ecpoint &p);
+	ecpoint multiplyPointG_fixedwindow(const uint256 &k, int w = 4); // New declaration
 
 	uint256 addModN(const uint256 &a, const uint256 &b);
 	uint256 subModN(const uint256 &a, const uint256 &b);

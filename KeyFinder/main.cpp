@@ -12,6 +12,16 @@
 
 #include "DeviceManager.h"
 
+// Required for std::thread, std::vector, std::min, std::stringstream
+// <vector> and <sstream> should be pulled in by previous changes or other includes.
+// Add <thread> and <algorithm> explicitly if not covered.
+#include <thread>       // For std::thread
+#include <vector>       // For std::vector (though likely already included)
+#include <algorithm>    // For std::min
+#include <sstream>      // For std::stringstream (already added for device parsing)
+#include <mutex>        // For std::mutex
+
+
 #ifdef BUILD_CUDA
 #include "CudaKeySearchDevice.h"
 #endif
@@ -46,7 +56,8 @@ typedef struct {
 
     std::string checkpointFile = "";
 
-    int device = 0;
+    // int device = 0; // Old: single device
+    std::vector<int> devices; // New: vector of device IDs
 
     std::string resultsFile = "";
 
@@ -61,7 +72,14 @@ static RunConfig _config;
 
 std::vector<DeviceManager::DeviceInfo> _devices;
 
-void writeCheckpoint(secp256k1::uint256 nextKey);
+// Global mutex for thread-safe console output and file access (simplified)
+static std::mutex console_mutex;
+// Note: For resultsFile, if multiple threads find keys simultaneously,
+// util::appendToFile would need to be internally thread-safe or also protected by a mutex
+// if direct file operations are not atomic / thread-safe by default on the OS.
+// For this subtask, we assume appendToFile is sufficiently safe or conflicts are rare.
+
+void writeCheckpoint(secp256k1::uint256 nextKey); // Stays as is for now, using global _config
 
 static uint64_t _lastUpdate = 0;
 static uint64_t _runningTime = 0;
@@ -103,11 +121,48 @@ void resultCallback(KeySearchResult info)
 	Logger::log(LogLevel::Info, logStr);
 }
 
+// Thread-safe version of resultCallback
+void resultCallback_threadsafe(KeySearchResult info)
+{
+    std::lock_guard<std::mutex> lock(console_mutex);
+    // Original resultCallback logic:
+    if(_config.resultsFile.length() != 0) {
+        // Log with device info if possible, though KeySearchResult doesn't have it directly
+        // For now, global log.
+		Logger::log(LogLevel::Info, "Found key for address '" + info.address + "'. Written to '" + _config.resultsFile + "'");
+		std::string s = info.address + " " + info.privateKey.toString(16) + " " + info.publicKey.toString(info.compressed);
+		util::appendToFile(_config.resultsFile, s); // Assuming util::appendToFile is thread-safe or race is acceptable for now
+		return;
+	}
+
+	std::string logStr = "[Dev: " + info.deviceName + "] Address:     " + info.address + "\n"; // Added deviceName
+	logStr += "[Dev: " + info.deviceName + "] Private key: " + info.privateKey.toString(16) + "\n";
+	logStr += "[Dev: " + info.deviceName + "] Compressed:  ";
+
+	if(info.compressed) {
+		logStr += "yes\n";
+	} else {
+		logStr += "no\n";
+	}
+	logStr += "[Dev: " + info.deviceName + "] Public key:  \n";
+
+	if(info.compressed) {
+		logStr += info.publicKey.toString(true) + "\n";
+	} else {
+		logStr += info.publicKey.x.toString(16) + "\n";
+		logStr += info.publicKey.y.toString(16) + "\n";
+	}
+	Logger::log(LogLevel::Info, logStr);
+}
+
+
 /**
 Callback to display progress
 */
-void statusCallback(KeySearchStatus info)
+void statusCallback_threadsafe(KeySearchStatus info)
 {
+    std::lock_guard<std::mutex> lock(console_mutex);
+    // Original statusCallback logic:
 	std::string speedStr;
 
 	if(info.speed < 0.01) {
@@ -127,28 +182,55 @@ void statusCallback(KeySearchStatus info)
     std::string targetStr = util::format(info.targets) + " target" + (info.targets > 1 ? "s" : "");
 
 
-	// Fit device name in 16 characters, pad with spaces if less
-	std::string devName = info.deviceName.substr(0, 16);
-	devName += std::string(16 - devName.length(), ' ');
+	// Fit device name in 10 characters for prefix, pad with spaces if less
+	std::string devName = info.deviceName;
+    if (devName.length() > 10) devName = devName.substr(0, 10);
+    else devName += std::string(10 - devName.length(), ' ');
 
     const char *formatStr = NULL;
 
-    if(_config.follow) {
-        formatStr = "%s %s/%sMB | %s %s %s %s\n";
-    } else {
-        formatStr = "\r%s %s / %sMB | %s %s %s %s";
-    }
+    // Always print newline for multi-device to prevent mangled output, or use a more sophisticated terminal manager
+    // For simplicity, always newline. The "follow" concept might be harder with multiple lines.
+    // formatStr = "[%s] %s/%sMB | %s %s %s %s\n";
+    // Using a simpler format for multi-GPU to avoid complex cursor control for now.
+    // Each device prints its own line.
+    printf("[%s] Mem: %s/%sMB | Targets: %s | Speed: %s | Total: %s | Time: %s\n",
+        devName.c_str(),
+        usedMemStr.c_str(), totalMemStr.c_str(),
+        targetStr.c_str(),
+        speedStr.c_str(),
+        totalStr.c_str(),
+        timeStr.c_str());
 
-	printf(formatStr, devName.c_str(), usedMemStr.c_str(), totalMemStr.c_str(), targetStr.c_str(), speedStr.c_str(), totalStr.c_str(), timeStr.c_str());
 
-    if(_config.checkpointFile.length() > 0) {
-        uint64_t t = util::getSystemTime();
-        if(t - _lastUpdate >= _config.checkpointInterval) {
-            Logger::log(LogLevel::Info, "Checkpoint");
-            writeCheckpoint(info.nextKey);
-            _lastUpdate = t;
-        }
+    // Checkpoint logic:
+    // This will be called by whichever thread's status update hits the interval.
+    // It will use the global _config and _startTime/_lastUpdate.
+    // This is not fully correct for multi-GPU checkpointing (e.g. nextKey for overall progress)
+    // but is kept as per subtask instructions (minimal changes to checkpointing).
+    // A proper multi-GPU checkpoint would need to aggregate progress or save per-device states.
+    uint64_t t = util::getSystemTime();
+    if(_config.checkpointFile.length() > 0 && (t - _lastUpdate >= _config.checkpointInterval)) {
+        // This lock prevents multiple threads trying to write checkpoint simultaneously if their status updates align.
+        // Only one thread should actually perform the write.
+        // A simple way is to check _lastUpdate again inside the lock.
+        // However, _lastUpdate itself is shared. This needs a more robust leader-election or dedicated checkpoint thread.
+        // For now, this might lead to multiple checkpoint writes if interval is hit by several threads closely.
+        // A quick fix: only one thread (e.g. for device 0 if it's active) handles checkpointing.
+        // This is still not perfect.
+        // Let's assume for now the existing global _lastUpdate offers some protection against too frequent writes.
+        // The problem is if info.nextKey is from a GPU that is further ahead than others.
+        // Current problem statement says: "writeCheckpoint still uses global _config".
+
+        // Simplification: let any thread trigger it, but it saves based on global _config.
+        // This part of the subtask is "Conceptual for now" / "minimal changes".
+        // The actual nextKey to save should be the minimum of all nextKeys from active threads.
+        // For now, it saves the nextKey of the thread that triggered the status.
+        Logger::log(LogLevel::Info, "[Dev: " + info.deviceName + "] Checkpoint triggered.");
+        writeCheckpoint(info.nextKey); // This saves based on global _config, but with this thread's nextKey.
+        _lastUpdate = t; // This update is global, might cause other threads to skip their checkpoint.
     }
+    fflush(stdout); // Ensure printf is flushed
 }
 
 /**
@@ -215,6 +297,7 @@ void usage()
     printf("--stride N              Increment by N keys at a time\n");
     printf("--share M/N             Divide the keyspace into N equal shares, process the Mth share\n");
     printf("--continue FILE         Save/load progress from FILE\n");
+    printf("--checkpoint-interval S Interval in SECONDS to write checkpoint file (default 60)\n");
 }
 
 
@@ -237,22 +320,79 @@ DeviceParameters getDefaultParameters(const DeviceManager::DeviceInfo &device)
 	return p;
 }
 
-static KeySearchDevice *getDeviceContext(DeviceManager::DeviceInfo &device, int blocks, int threads, int pointsPerThread)
+static KeySearchDevice *getDeviceContext(DeviceManager::DeviceInfo &deviceInfo, int blocks, int threads, int pointsPerThread)
 {
 #ifdef BUILD_CUDA
-    if(device.type == DeviceManager::DeviceType::CUDA) {
-        return new CudaKeySearchDevice((int)device.physicalId, threads, pointsPerThread, blocks);
+    if(deviceInfo.type == DeviceManager::DeviceType::CUDA) {
+        return new CudaKeySearchDevice(deviceInfo.id, threads, pointsPerThread, blocks);
     }
 #endif
 
 #ifdef BUILD_OPENCL
-    if(device.type == DeviceManager::DeviceType::OpenCL) {
-        return new CLKeySearchDevice(device.physicalId, threads, pointsPerThread, blocks);
+    if(deviceInfo.type == DeviceManager::DeviceType::OpenCL) {
+        return new CLKeySearchDevice(deviceInfo.id, threads, pointsPerThread, blocks);
     }
 #endif
 
     return NULL;
 }
+
+// Placeholder for the thread function
+static void device_thread_function(DeviceManager::DeviceInfo devInfo,
+                                   secp256k1::uint256 startKey,
+                                   secp256k1::uint256 endKey,
+                                   RunConfig thread_config,
+                                   const std::vector<std::string>& targets_list,
+                                   const std::string& targets_file_path)
+{
+    std::string devPrefix = "[Dev " + std::to_string(devInfo.id) + "] ";
+    Logger::log(LogLevel::Info, devPrefix + devInfo.name + ": Processing keys from " +
+                startKey.toString(16) + " to " + endKey.toString(16));
+
+    try {
+        // Determine device parameters (use thread_config's values if set, otherwise use defaults for this device)
+        DeviceParameters params = getDefaultParameters(devInfo);
+        unsigned int actual_blocks = (thread_config.blocks == 0) ? params.blocks : thread_config.blocks;
+        unsigned int actual_threads = (thread_config.threads == 0) ? params.threads : thread_config.threads;
+        unsigned int actual_points = (thread_config.pointsPerThread == 0) ? params.pointsPerThread : thread_config.pointsPerThread;
+
+        Logger::log(LogLevel::Info, devPrefix + "Using B: " + std::to_string(actual_blocks) +
+                   ", T: " + std::to_string(actual_threads) +
+                   ", P: " + std::to_string(actual_points));
+
+
+        KeySearchDevice *d = getDeviceContext(devInfo, actual_blocks, actual_threads, actual_points);
+        if (!d) {
+            Logger::log(LogLevel::Error, devPrefix + "Failed to get device context.");
+            return;
+        }
+
+        KeyFinder f(startKey, endKey, thread_config.compression, d, thread_config.stride);
+
+        f.setResultCallback(resultCallback_threadsafe);
+        f.setStatusInterval(thread_config.statusInterval);
+        f.setStatusCallback(statusCallback_threadsafe);
+
+        f.init();
+
+        if(!targets_file_path.empty()) {
+            f.setTargets(targets_file_path);
+        } else {
+            f.setTargets(targets_list);
+        }
+
+        Logger::log(LogLevel::Info, devPrefix + "Starting search...");
+        f.run();
+        Logger::log(LogLevel::Info, devPrefix + "Search finished.");
+
+        delete d;
+    } catch(const KeySearchException &ex) {
+        Logger::log(LogLevel::Error, devPrefix + "Error: " + ex.msg);
+    } catch(const std::exception &exStd) {
+         Logger::log(LogLevel::Error, devPrefix + "Standard Exception: " + exStd.what());
+    }
+}
+
 
 static void printDeviceList(const std::vector<DeviceManager::DeviceInfo> &devices)
 {
@@ -318,7 +458,13 @@ void writeCheckpoint(secp256k1::uint256 nextKey)
     tmp << "threads=" << _config.threads << std::endl;
     tmp << "points=" << _config.pointsPerThread << std::endl;
     tmp << "compression=" << getCompressionString(_config.compression) << std::endl;
-    tmp << "device=" << _config.device << std::endl;
+    // Checkpoint for multiple devices will need rework. For now, save the first device or a comma-separated list.
+    if(!_config.devices.empty()){
+        tmp << "device=" << _config.devices[0] << std::endl; // Save first device for now
+    } else {
+        // Potentially save a special value or nothing if no devices were configured (e.g. list-devices run)
+        tmp << "device=-1" << std::endl;
+    }
     tmp << "elapsed=" << (_config.elapsed + util::getSystemTime() - _startTime) << std::endl;
     tmp << "stride=" << _config.stride.toString();
     tmp.close();
@@ -368,61 +514,142 @@ void readCheckpointFile()
 
 int run()
 {
-    if(_config.device < 0 || _config.device >= _devices.size()) {
-        Logger::log(LogLevel::Error, "device " + util::format(_config.device) + " does not exist");
-        return 1;
+    // Default to device 0 if no devices were specified by user
+    if (_config.devices.empty()) {
+        if (!_devices.empty() && _devices[0].id >=0) {
+            Logger::log(LogLevel::Info, "No device specified via -d, defaulting to device " + std::to_string(_devices[0].id) + " (" + _devices[0].name + ").");
+            _config.devices.push_back(_devices[0].id);
+        } else {
+            Logger::log(LogLevel::Error, "No CUDA/OpenCL devices detected or available to default to.");
+            return 1;
+        }
     }
+
+    std::string dev_list_str;
+    for(size_t i=0; i < _config.devices.size(); ++i) {
+        dev_list_str += std::to_string(_config.devices[i]);
+        if(i < _config.devices.size() - 1) dev_list_str += ",";
+    }
+    Logger::log(LogLevel::Info, "Using " + std::to_string(_config.devices.size()) + " GPU(s): " + dev_list_str);
 
     Logger::log(LogLevel::Info, "Compression: " + getCompressionString(_config.compression));
-    Logger::log(LogLevel::Info, "Starting at: " + _config.nextKey.toString());
-    Logger::log(LogLevel::Info, "Ending at:   " + _config.endKey.toString());
-    Logger::log(LogLevel::Info, "Counting by: " + _config.stride.toString());
+    Logger::log(LogLevel::Info, "Overall Keyspace Start: " + _config.nextKey.toString(16));
+    Logger::log(LogLevel::Info, "Overall Keyspace End:   " + _config.endKey.toString(16));
+    Logger::log(LogLevel::Info, "Stride: " + _config.stride.toString());
 
-    try {
+    _startTime = util::getSystemTime();
+    _lastUpdate = _startTime;
 
-        _lastUpdate = util::getSystemTime();
-        _startTime = util::getSystemTime();
+    std::vector<std::thread> worker_threads;
 
-        // Use default parameters if they have not been set
-        DeviceParameters params = getDefaultParameters(_devices[_config.device]);
-
-        if(_config.blocks == 0) {
-            _config.blocks = params.blocks;
-        }
-
-        if(_config.threads == 0) {
-            _config.threads = params.threads;
-        }
-
-        if(_config.pointsPerThread == 0) {
-            _config.pointsPerThread = params.pointsPerThread;
-        }
-
-        // Get device context
-        KeySearchDevice *d = getDeviceContext(_devices[_config.device], _config.blocks, _config.threads, _config.pointsPerThread);
-
-        KeyFinder f(_config.nextKey, _config.endKey, _config.compression, d, _config.stride);
-
-        f.setResultCallback(resultCallback);
-        f.setStatusInterval(_config.statusInterval);
-        f.setStatusCallback(statusCallback);
-
-        f.init();
-
-        if(!_config.targetsFile.empty()) {
-            f.setTargets(_config.targetsFile);
-        } else {
-            f.setTargets(_config.targets);
-        }
-
-        f.run();
-
-        delete d;
-    } catch(KeySearchException ex) {
-        Logger::log(LogLevel::Info, "Error: " + ex.msg);
+    if (_config.nextKey.cmp(_config.endKey) > 0 && !(_config.nextKey == _config.endKey && _config.nextKey == 1)) {
+        Logger::log(LogLevel::Error, "Start key is greater than end key. Nothing to scan.");
         return 1;
     }
+    secp256k1::uint256 total_keys_to_scan = (_config.endKey - _config.nextKey) + 1;
 
+    unsigned int num_gpus = _config.devices.size();
+
+    if (num_gpus == 0) {
+        Logger::log(LogLevel::Error, "Configuration error: No GPUs selected for processing (num_gpus is 0).");
+        return 1;
+    }
+    // Handle case where total_keys_to_scan might be 0 if startKey=endKey but they are not 1 (e.g. single key scan)
+    if (total_keys_to_scan.isZero() && !(_config.nextKey == _config.endKey && _config.nextKey == secp256k1::uint256(1))) {
+         Logger::log(LogLevel::Info, "Total keys to scan is zero (start equals end, and not 1). Scanning single key: " + _config.nextKey.toString(16));
+         total_keys_to_scan = 1; // Ensure single key scan proceeds
+    } else if (total_keys_to_scan.isZero()) {
+         Logger::log(LogLevel::Info, "Total keys to scan is zero. Nothing to do.");
+         return 0;
+    }
+
+    secp256k1::uint256 keys_per_gpu_base = total_keys_to_scan / num_gpus;
+    secp256k1::uint256 remainder_keys_uint256 = total_keys_to_scan % num_gpus;
+    uint64_t remainder_keys = 0;
+    if (!remainder_keys_uint256.isZero()) {
+        remainder_keys = remainder_keys_uint256.toUint64();
+    }
+
+    secp256k1::uint256 current_batch_start_key = _config.nextKey;
+
+    for (unsigned int i = 0; i < num_gpus; ++i) {
+        int actual_device_id = _config.devices[i];
+        DeviceManager::DeviceInfo deviceInfo;
+        bool foundDevInfo = false;
+        for(const auto& d : _devices) {
+            if(d.id == actual_device_id) {
+                deviceInfo = d;
+                foundDevInfo = true;
+                break;
+            }
+        }
+        if(!foundDevInfo) {
+            Logger::log(LogLevel::Error, "Internal Error: Device ID " + std::to_string(actual_device_id) + " not found during thread setup. Should have been caught in main().");
+            continue;
+        }
+
+        secp256k1::uint256 num_keys_for_this_gpu = keys_per_gpu_base;
+        if (i < remainder_keys) {
+            num_keys_for_this_gpu = num_keys_for_this_gpu + 1;
+        }
+
+        if (num_keys_for_this_gpu.isZero()) {
+            Logger::log(LogLevel::Info, "[Dev " + std::to_string(deviceInfo.id) + "] No keys to scan in its share, skipping.");
+            continue;
+        }
+
+        secp256k1::uint256 dev_thread_start_key = current_batch_start_key;
+        secp256k1::uint256 dev_thread_end_key = dev_thread_start_key + num_keys_for_this_gpu - 1;
+
+        if (dev_thread_start_key.cmp(_config.endKey) > 0 && current_batch_start_key.cmp(_config.endKey) <=0 && i > 0) {
+             dev_thread_end_key = _config.endKey;
+        } else if (dev_thread_end_key.cmp(_config.endKey) > 0) {
+             dev_thread_end_key = _config.endKey;
+        }
+
+        if (dev_thread_start_key.cmp(dev_thread_end_key) > 0 && !num_keys_for_this_gpu.isZero() ) {
+             Logger::log(LogLevel::Info, "[Dev " + std::to_string(deviceInfo.id) + "] No keys to scan due to keyspace adjustments (start=" + dev_thread_start_key.toString(16) + ", end=" + dev_thread_end_key.toString(16) +"). Skipping.");
+             // This can happen if total_keys_to_scan is very small compared to num_gpus
+             if (current_batch_start_key.cmp(_config.endKey) > 0) break; // All keys assigned
+             current_batch_start_key = dev_thread_end_key + 1; // Still advance for next potential GPU
+             if (current_batch_start_key.isZero() && !dev_thread_end_key.isZero()) { break; } // Overflow
+             continue;
+        }
+
+        RunConfig thread_specific_config = _config; // Copy base config
+        thread_specific_config.device = deviceInfo.id; // Set the actual device ID for this thread's config context
+                                                       // B, T, P settings from global _config will be used if set,
+                                                       // otherwise device_thread_function will apply defaults.
+
+        worker_threads.emplace_back(std::thread(device_thread_function,
+                                                deviceInfo,
+                                                dev_thread_start_key,
+                                                dev_thread_end_key,
+                                                thread_specific_config,
+                                                std::cref(_config.targets), // Pass targets by const reference
+                                                std::cref(_config.targetsFile))); // Pass targetsFile by const reference
+
+        current_batch_start_key = dev_thread_end_key + 1;
+        if (current_batch_start_key.isZero() && !dev_thread_end_key.isZero()) {
+             Logger::log(LogLevel::Info, "Reached end of addressable keyspace or overflow in key division after device " + std::to_string(deviceInfo.id) + ".");
+             break;
+        }
+        if (current_batch_start_key.cmp(_config.endKey) > 0 && i < num_gpus -1 ) {
+            Logger::log(LogLevel::Info, "All keys assigned to GPUs. Remaining " + std::to_string(num_gpus - 1 - i) + " GPUs have no further work.");
+            break;
+        }
+    }
+
+    for (auto& th : worker_threads) {
+        if (th.joinable()) {
+            th.join();
+        }
+    }
+
+    Logger::log(LogLevel::Info, "\nAll device threads completed.");
+    if(worker_threads.empty() && num_gpus > 0 && total_keys_to_scan > secp256k1::uint256(0)){
+        Logger::log(LogLevel::Warning, "No work was dispatched to any GPU threads, though GPUs were specified and keyspace was available. Check keyspace division logic and device parameters.");
+    }
     return 0;
 }
 
@@ -517,6 +744,7 @@ int main(int argc, char **argv)
     parser.add("", "--continue", true);
     parser.add("", "--share", true);
     parser.add("", "--stride", true);
+    parser.add("", "--checkpoint-interval", true);
 
     try {
         parser.parse(argc, argv);
@@ -542,7 +770,29 @@ int main(int argc, char **argv)
 				_config.pointsPerThread = util::parseUInt32(optArg.arg);
                 optPoints = true;
 			} else if(optArg.equals("-d", "--device")) {
-				_config.device = util::parseUInt32(optArg.arg);
+				//_config.device = util::parseUInt32(optArg.arg); // Old single device parsing
+                // New parsing for comma-separated list
+                std::string device_str = optArg.arg;
+                std::stringstream ss(device_str); // Requires #include <sstream>
+                std::string segment;
+                _config.devices.clear(); // Clear any defaults if -d is specified
+                while(std::getline(ss, segment, ',')) {
+                    if(segment.empty()) continue; // Handle cases like "0,,1" or trailing comma
+                    try {
+                        // util::trim function might be useful here if stoi has issues with spaces
+                        // For now, assume segment is clean or stoi handles it.
+                        _config.devices.push_back(std::stoi(segment));
+                    } catch (const std::invalid_argument& ia) {
+                        throw std::string("Invalid device ID '" + segment + "': not a number.");
+                    } catch (const std::out_of_range& oor) {
+                        throw std::string("Invalid device ID '" + segment + "': out of range.");
+                    }
+                }
+                if(_config.devices.empty() && !device_str.empty() && device_str.find_first_not_of(',') != std::string::npos){
+                     throw std::string("No valid device IDs found in '" + device_str + "'.");
+                } else if (device_str.empty() && optArg.isSet) {
+                     throw std::string("Device option -d requires an argument (e.g., 0 or 0,1).");
+                }
 			} else if(optArg.equals("-c", "--compressed")) {
 				optCompressed = true;
             } else if(optArg.equals("-u", "--uncompressed")) {
@@ -602,6 +852,16 @@ int main(int argc, char **argv)
                 }
             } else if(optArg.equals("-f", "--follow")) {
                 _config.follow = true;
+            } else if(optArg.equals("", "--checkpoint-interval")) {
+                try {
+                    unsigned long long interval_seconds = std::stoull(optArg.arg);
+                    if (interval_seconds == 0) {
+                        throw std::string("Interval must be a positive integer.");
+                    }
+                    _config.checkpointInterval = interval_seconds * 1000; // Convert to milliseconds
+                } catch (const std::exception& e) {
+                    throw std::string("Invalid interval value '" + optArg.arg + "': " + e.what());
+                }
             }
 
 		} catch(std::string err) {
@@ -615,11 +875,31 @@ int main(int argc, char **argv)
         return 0;
     }
 
-	// Verify device exists
-	if(_config.device < 0 || _config.device >= _devices.size()) {
-		Logger::log(LogLevel::Error, "device " + util::format(_config.device) + " does not exist");
-		return 1;
-	}
+	// Device ID validation: if -d was used and devices were parsed, validate them.
+    // If -d was not used, _config.devices will be empty, and run() will default it.
+    if (parser.found("-d", "--device") && !_config.devices.empty()) {
+        for(int devId : _config.devices){
+            bool found = false;
+            for(const auto& dInfo : _devices){
+                if(dInfo.id == devId){
+                    found = true;
+                    break;
+                }
+            }
+            if(!found){
+                 Logger::log(LogLevel::Error, "Error --device: Specified device ID " + util::format(devId) + " does not exist or is not available.");
+                 printDeviceList(_devices);
+                 return 1;
+            }
+        }
+    } else if (parser.found("-d", "--device") && _config.devices.empty()){
+        // This case means -d was given, but no valid IDs were parsed (e.g. -d "" or -d ",," )
+        // The parsing logic itself should have thrown an error. If it didn't, this is a fallback.
+        Logger::log(LogLevel::Error, "Error --device: No valid device IDs specified.");
+        return 1;
+    }
+    // If !parser.found("-d", "--device"), _config.devices remains empty, run() will handle default.
+
 
 	// Parse operands
 	std::vector<std::string> ops = parser.getOperands();

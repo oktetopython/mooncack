@@ -37,6 +37,8 @@ KeyFinder::KeyFinder(const secp256k1::uint256 &startKey, const secp256k1::uint25
     _iterCount = 0;
 
     _stride = stride;
+
+    _stopFlagPtr = nullptr; // Initialize new member
 }
 
 KeyFinder::~KeyFinder()
@@ -143,6 +145,14 @@ void KeyFinder::init()
 void KeyFinder::stop()
 {
 	_running = false;
+    if (_stopFlagPtr) {
+        _stopFlagPtr->store(true, std::memory_order_relaxed);
+    }
+}
+
+void KeyFinder::setStopFlag(std::atomic<bool>* flag)
+{
+    _stopFlagPtr = flag;
 }
 
 void KeyFinder::removeTargetFromList(const unsigned int hash[5])
@@ -174,6 +184,12 @@ void KeyFinder::run()
 	_totalTime = 0;
 
 	while(_running) {
+        // Check the stop flag at the beginning of each iteration
+        if (_stopFlagPtr && _stopFlagPtr->load(std::memory_order_relaxed)) {
+            Logger::log(LogLevel::Info, "KeyFinder::run: Stop signal received, terminating search loop.");
+            _running = false; // Ensure existing _running flag is also set to false to break loop
+            continue; // Skip to loop condition check
+        }
 
         _device->doStep();
         _iterCount++;

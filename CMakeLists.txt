@@ -85,6 +85,8 @@ if(BUILD_SHARED_LIB)
         secp256k1lib/secp256k1.cpp
         # cudaUtil
         cudaUtil/cudaUtil.cpp
+        # C API source file (assuming it's at the root of the project)
+        bitcrack_capi.cpp
     )
 
     # cudaMath is header-only, its path is already in include_directories
@@ -126,6 +128,26 @@ if(BUILD_SHARED_LIB)
     # This is generally good practice.
     # The individual subdirectories like CudaKeySearchDevice already link to CUDA::cudart
     # so this might be redundant here but ensures linkage for bitcrack_shared itself.
+
+    # Installation rules for the shared library and C API header
+    include(GNUInstallDirs) # Provides CMAKE_INSTALL_LIBDIR, CMAKE_INSTALL_INCLUDEDIR, etc.
+    install(TARGETS bitcrack_shared
+        EXPORT BitCrackTargets # Optional: if other CMake projects will link to this
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} # For import library on Windows
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} # For DLL on Windows
+        INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} # For generated export header if part of target's interface
+    )
+    # Install the C API header file
+    install(FILES bitcrack_capi.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    # Install the generated export header if it's not implicitly handled by INCLUDES DESTINATION
+    # (Usually, it's better if consumers get this via target_link_libraries against the exported target)
+    # install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/bitcrack_export.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/bitcrack)
+
+
+    # Make sure all necessary internal include paths are available to bitcrack_shared
+    # The existing global include_directories(...) and the target_include_directories for bitcrack_shared
+    # should cover this. Specifically, CMAKE_CURRENT_SOURCE_DIR is already in target_include_directories.
 
 endif()
 

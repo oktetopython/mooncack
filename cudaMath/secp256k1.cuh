@@ -46,6 +46,100 @@ __constant__ static unsigned int _LAMBDA[8] = {
 	0x5363AD4C, 0xC05C30E0, 0xA5261C02, 0x8812645A, 0x122E22EA, 0x20816678, 0xDF02967C, 0x1B23BD72
 };
 
+// For GPU-side fixed-window k*G, window size w=4 (16 entries)
+// Each point coordinate (X or Y) is 8 uints (256-bit)
+// Total size = 16 entries * 8 uints/entry = 128 uints per table
+__constant__ unsigned int c_gWindowTableX[16 * 8];
+__constant__ unsigned int c_gWindowTableY[16 * 8];
+
+// Forward declare for use in point operations
+__device__ static void invModP(unsigned int value[8]);
+__device__ static void mulModP(const unsigned int a[8], const unsigned int b[8], unsigned int c[8]);
+__device__ static void addModP(const unsigned int a[8], const unsigned int b[8], unsigned int c[8]);
+__device__ static void subModP(const unsigned int a[8], const unsigned int b[8], unsigned int c[8]);
+__device__ __forceinline__ static void copyBigInt(const unsigned int src[8], unsigned int dest[8]);
+__device__ __forceinline__ bool isInfinity(const unsigned int x[8]);
+__device__ static bool equal(const unsigned int *a, const unsigned int *b);
+
+
+// Device function for point doubling: (xR, yR) = 2 * (xP, yP)
+__device__ static void device_doublePoint(const unsigned int xP[8], const unsigned int yP[8], unsigned int xR[8], unsigned int yR[8]) {
+    if (isInfinity(yP) || (yP[0]==0 && yP[1]==0 && yP[2]==0 && yP[3]==0 && yP[4]==0 && yP[5]==0 && yP[6]==0 && yP[7]==0) ) { // Check if yP is zero effectively
+        // Point is at infinity or has y=0 (2*P = infinity)
+        for(int i=0; i<8; ++i) xR[i] = yR[i] = 0xFFFFFFFF;
+        return;
+    }
+
+    unsigned int lambda[8], temp[8], yP2[8];
+
+    // lambda = (3 * xP^2) * (2 * yP)^-1 mod p
+    // 2 * yP
+    addModP(yP, yP, yP2);
+    invModP(yP2); // yP2 is now (2*yP)^-1
+
+    // 3 * xP^2
+    mulModP(xP, xP, temp);    // xP^2
+    addModP(temp, temp, lambda); // 2 * xP^2
+    addModP(lambda, temp, lambda); // 3 * xP^2
+
+    mulModP(lambda, yP2, lambda); // lambda = (3 * xP^2) * (2*yP)^-1
+
+    // xR = lambda^2 - 2 * xP mod p
+    mulModP(lambda, lambda, xR); // lambda^2
+    subModP(xR, xP, xR);       // lambda^2 - xP
+    subModP(xR, xP, xR);       // lambda^2 - 2*xP
+
+    // yR = lambda * (xP - xR) - yP mod p
+    subModP(xP, xR, temp);       // xP - xR
+    mulModP(lambda, temp, yR);   // lambda * (xP - xR)
+    subModP(yR, yP, yR);       // lambda * (xP - xR) - yP
+}
+
+// Device function for point addition: (xR, yR) = (xP1, yP1) + (xP2, yP2)
+__device__ static void device_addPoints(const unsigned int xP1[8], const unsigned int yP1[8],
+                                     const unsigned int xP2[8], const unsigned int yP2[8],
+                                     unsigned int xR[8], unsigned int yR[8]) {
+    if (isInfinity(xP1)) {
+        copyBigInt(xP2, xR);
+        copyBigInt(yP2, yR);
+        return;
+    }
+    if (isInfinity(xP2)) {
+        copyBigInt(xP1, xR);
+        copyBigInt(yP1, yR);
+        return;
+    }
+
+    if (equal(xP1, xP2)) {
+        if (equal(yP1, yP2)) {
+            // P1 == P2, use double point
+            device_doublePoint(xP1, yP1, xR, yR);
+        } else {
+            // P1 == -P2 (x1=x2, y1!=y2 implies y1 = -y2 mod p), result is point at infinity
+            for(int i=0; i<8; ++i) xR[i] = yR[i] = 0xFFFFFFFF;
+        }
+        return;
+    }
+
+    unsigned int lambda[8], temp[8];
+
+    // lambda = (yP2 - yP1) * (xP2 - xP1)^-1 mod p
+    subModP(yP2, yP1, lambda); // yP2 - yP1
+    subModP(xP2, xP1, temp);   // xP2 - xP1
+    invModP(temp);             // (xP2 - xP1)^-1
+    mulModP(lambda, temp, lambda); // lambda calculation complete
+
+    // xR = lambda^2 - xP1 - xP2 mod p
+    mulModP(lambda, lambda, xR); // lambda^2
+    subModP(xR, xP1, xR);      // lambda^2 - xP1
+    subModP(xR, xP2, xR);      // lambda^2 - xP1 - xP2
+
+    // yR = lambda * (xP1 - xR) - yP1 mod p
+    subModP(xP1, xR, temp);      // xP1 - xR
+    mulModP(lambda, temp, yR);   // lambda * (xP1 - xR)
+    subModP(yR, yP1, yR);      // lambda * (xP1 - xR) - yP1
+}
+
 
 __device__ __forceinline__ bool isInfinity(const unsigned int x[8])
 {
