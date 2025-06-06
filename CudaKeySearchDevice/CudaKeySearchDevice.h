@@ -3,6 +3,7 @@
 
 #include "KeySearchDevice.h"
 #include <vector>
+#include <unordered_set> // Added for std::unordered_set
 #include <cuda_runtime.h>
 #include "secp256k1.h"
 #include "CudaDeviceKeys.h"
@@ -39,6 +40,8 @@ private:
 
     std::string _deviceName;
 
+    cuda::CudaDeviceInfo _deviceInfo;
+
     secp256k1::uint256 _startExponent;
 
     uint64_t _iterations;
@@ -55,7 +58,8 @@ private:
 
     void getResultsInternal();
 
-    std::vector<hash160> _targets;
+    // std::vector<hash160> _targets; // Old
+    std::unordered_set<hash160, Hash160Hasher> _targets; // New
 
     bool isTargetInList(const unsigned int hash[5]);
     

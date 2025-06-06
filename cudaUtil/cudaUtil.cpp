@@ -24,8 +24,14 @@ cuda::CudaDeviceInfo cuda::getDeviceInfo(int device)
 	devInfo.major = properties.major;
 	devInfo.minor = properties.minor;
 	devInfo.mpCount = properties.multiProcessorCount;
-	devInfo.mem = properties.totalGlobalMem;
+	devInfo.mem = properties.totalGlobalMem; // This is totalGlobalMem
 	devInfo.name = std::string(properties.name);
+
+	// Populate new fields
+	devInfo.maxThreadsPerBlock = properties.maxThreadsPerBlock;
+	devInfo.maxThreadsPerMultiProcessor = properties.maxThreadsPerMultiProcessor;
+	devInfo.warpSize = properties.warpSize;
+	devInfo.sharedMemPerBlock = properties.sharedMemPerBlock;
 
 	int cores = 0;
 	switch(devInfo.major) {

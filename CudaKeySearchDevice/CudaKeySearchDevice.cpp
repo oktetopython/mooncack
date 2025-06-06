@@ -23,32 +23,73 @@ CudaKeySearchDevice::CudaKeySearchDevice(int device, int threads, int pointsPerT
         throw KeySearchException(ex.msg);
     }
 
-    if(threads <= 0 || threads % 32 != 0) {
-        throw KeySearchException("The number of threads must be a multiple of 32");
+    // Store device info locally, as it's used multiple times
+    _deviceInfo = info; // Assuming _deviceInfo is a new member of CudaKeySearchDevice of type cuda::CudaDeviceInfo
+
+    if (blocks == 0) { // Auto-calculate _threads and _blocks
+        _threads = 256; // Default threads per block
+
+        if (_threads > _deviceInfo.maxThreadsPerBlock) {
+            _threads = _deviceInfo.maxThreadsPerBlock;
+        }
+
+        // Ensure multiple of warpSize and not zero
+        _threads = (_threads / _deviceInfo.warpSize) * _deviceInfo.warpSize;
+        if (_threads == 0) {
+            _threads = _deviceInfo.warpSize;
+        }
+
+        int waves_per_sm = 4; // Default waves of blocks per SM
+        _blocks = _deviceInfo.mpCount * waves_per_sm;
+        if (_blocks == 0) { // Should not happen if mpCount > 0 and waves_per_sm > 0
+            _blocks = 1; // Fallback to a single block
+        }
+
+        Logger::log(LogLevel::Info, "Auto-configured for device '" + _deviceName + "':");
+        Logger::log(LogLevel::Info, "  SM Count: " + util::format("%d", _deviceInfo.mpCount));
+        Logger::log(LogLevel::Info, "  Max Threads/Block: " + util::format("%d", _deviceInfo.maxThreadsPerBlock));
+        Logger::log(LogLevel::Info, "  Warp Size: " + util::format("%d", _deviceInfo.warpSize));
+        Logger::log(LogLevel::Info, "  Calculated Blocks: " + util::format("%d", _blocks) + ", Threads/Block: " + util::format("%d", _threads));
+
+    } else { // User-specified _threads (as 'threads' param) and _blocks
+        _threads = threads; // 'threads' parameter from constructor is threads per block
+        _blocks = blocks;   // 'blocks' parameter from constructor
+
+        Logger::log(LogLevel::Info, "User-specified configuration for device '" + _deviceName + "':");
+        Logger::log(LogLevel::Info, "  Requested Blocks: " + util::format("%d", _blocks) + ", Threads/Block: " + util::format("%d", _threads));
+
+        if (_threads > _deviceInfo.maxThreadsPerBlock) {
+            Logger::log(LogLevel::Warn, "Requested threads per block (" + util::format("%d", _threads) +
+                                       ") exceeds device maximum (" + util::format("%d", _deviceInfo.maxThreadsPerBlock) + "). Clamping.");
+            _threads = _deviceInfo.maxThreadsPerBlock;
+        }
+
+        // Ensure multiple of warpSize and not zero
+        int original_threads = _threads;
+        _threads = (_threads / _deviceInfo.warpSize) * _deviceInfo.warpSize;
+        if (_threads == 0) {
+            Logger::log(LogLevel::Warn, "Requested threads per block (" + util::format("%d", original_threads) +
+                                       ") is less than warp size (" + util::format("%d", _deviceInfo.warpSize) + "). Setting to warp size.");
+            _threads = _deviceInfo.warpSize;
+        } else if (original_threads != _threads) {
+             Logger::log(LogLevel::Warn, "Adjusted threads per block from " + util::format("%d", original_threads) + " to " + util::format("%d", _threads) +
+                                       " to be a multiple of warp size (" + util::format("%d", _deviceInfo.warpSize) + ").");
+        }
+        Logger::log(LogLevel::Info, "  Adjusted Blocks: " + util::format("%d", _blocks) + ", Threads/Block: " + util::format("%d", _threads));
     }
 
-    if(pointsPerThread <= 0) {
+    // Common validations
+    if (_threads <= 0) { // Should be caught by warpSize logic, but as a safeguard
+        throw KeySearchException("Threads per block must be positive.");
+    }
+    if (_threads % _deviceInfo.warpSize != 0) {
+        // This case should ideally be handled by the rounding logic above.
+        // If it's reached, it implies a logic error or an unsupported warpSize (e.g. 0).
+        throw KeySearchException("Threads per block must be a multiple of warp size (" + util::format("%d", _deviceInfo.warpSize) + "). Calculated: " + util::format("%d", _threads));
+    }
+
+    if (pointsPerThread <= 0) {
         throw KeySearchException("At least 1 point per thread required");
-    }
-
-    // Specifying blocks on the commandline is depcreated but still supported. If there is no value for
-    // blocks, devide the threads evenly among the multi-processors
-    if(blocks == 0) {
-        if(threads % info.mpCount != 0) {
-            throw KeySearchException("The number of threads must be a multiple of " + util::format("%d", info.mpCount));
-        }
-
-        _threads = threads / info.mpCount;
-
-        _blocks = info.mpCount;
-
-        while(_threads > 512) {
-            _threads /= 2;
-            _blocks *= 2;
-        }
-    } else {
-        _threads = threads;
-        _blocks = blocks;
     }
 
     _iterations = 0;
@@ -130,16 +171,18 @@ void CudaKeySearchDevice::generateStartingPoints()
 }
 
 
-void CudaKeySearchDevice::setTargets(const std::set<KeySearchTarget> &targets)
+void CudaKeySearchDevice::setTargets(const std::set<KeySearchTarget> &targetsFromKeyFinder)
 {
     _targets.clear();
     
-    for(std::set<KeySearchTarget>::iterator i = targets.begin(); i != targets.end(); ++i) {
+    for(std::set<KeySearchTarget>::const_iterator i = targetsFromKeyFinder.begin(); i != targetsFromKeyFinder.end(); ++i) {
         hash160 h(i->value);
-        _targets.push_back(h);
+        _targets.insert(h); // Use insert for std::unordered_set
     }
 
-    cudaCall(_targetLookup.setTargets(_targets));
+    // Convert std::unordered_set to std::vector for _targetLookup.setTargets
+    std::vector<hash160> tempTargetsVector(_targets.begin(), _targets.end());
+    cudaCall(_targetLookup.setTargets(tempTargetsVector));
 }
 
 void CudaKeySearchDevice::doStep()
@@ -178,29 +221,14 @@ void CudaKeySearchDevice::getMemoryInfo(uint64_t &freeMem, uint64_t &totalMem)
 
 void CudaKeySearchDevice::removeTargetFromList(const unsigned int hash[5])
 {
-    size_t count = _targets.size();
-
-    while(count) {
-        if(memcmp(hash, _targets[count - 1].h, 20) == 0) {
-            _targets.erase(_targets.begin() + count - 1);
-            return;
-        }
-        count--;
-    }
+    hash160 keyToRemove(hash);
+    _targets.erase(keyToRemove);
 }
 
 bool CudaKeySearchDevice::isTargetInList(const unsigned int hash[5])
 {
-    size_t count = _targets.size();
-
-    while(count) {
-        if(memcmp(hash, _targets[count - 1].h, 20) == 0) {
-            return true;
-        }
-        count--;
-    }
-
-    return false;
+    hash160 keyToFind(hash);
+    return _targets.count(keyToFind) > 0;
 }
 
 uint32_t CudaKeySearchDevice::getPrivateKeyOffset(int thread, int block, int idx)
@@ -261,7 +289,9 @@ void CudaKeySearchDevice::getResultsInternal()
 
     // Reload the bloom filters
     if(actualCount) {
-        cudaCall(_targetLookup.setTargets(_targets));
+        // Convert std::unordered_set to std::vector for _targetLookup.setTargets
+        std::vector<hash160> tempTargetsVector(_targets.begin(), _targets.end());
+        cudaCall(_targetLookup.setTargets(tempTargetsVector));
     }
 }
 
