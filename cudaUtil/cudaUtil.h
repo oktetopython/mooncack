@@ -14,9 +14,15 @@ namespace cuda {
 		int major;
 		int minor;
 		int mpCount;
-		int cores;
-		uint64_t mem;
+		int cores; // Present, not explicitly requested to remove, will keep
+		uint64_t mem; // Assuming this is totalGlobalMem
 		std::string name;
+		// New fields based on subtask
+		int maxThreadsPerBlock;
+		int maxThreadsPerMultiProcessor;
+		int warpSize;
+		size_t sharedMemPerBlock;
+		// totalGlobalMem is already covered by 'mem'
 
 	}CudaDeviceInfo;
 
