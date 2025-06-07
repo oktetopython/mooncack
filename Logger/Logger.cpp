@@ -32,54 +32,50 @@ std::string LogLevel::toString(int level)
 	return "";
 }
 
-std::string Logger::getDateTimeString()
-{
-	time_t     now = time(0);
-	struct tm  tstruct;
-	char       buf[80];
-	tstruct = *localtime(&now);
-
-	strftime(buf, sizeof(buf), "%Y-%m-%d.%X", &tstruct);
-
-	return std::string(buf);
-}
-
-std::string Logger::formatLog(int logLevel, std::string msg)
-{
-	std::string dateTime = getDateTimeString();
-
-	std::string prefix = "[" + dateTime + "] [" + LogLevel::toString(logLevel) + "] ";
-
-	size_t prefixLen = prefix.length();
-
-	std::string padding(prefixLen, ' ');
-
-	if(msg.find('\n', 0) != std::string::npos) {
- 		size_t pos = 0;
-		size_t prev = 0;
-
-		while((pos = msg.find('\n', prev)) != std::string::npos) {
-			prefix += msg.substr(prev, pos - prev) + "\n" + padding;
-			prev = pos + 1;
-		}
-
-		prefix += msg.substr(prev);
-	} else {
-		prefix += msg;
-	}
-
-	return prefix;
-}
-
+// getDateTimeString and formatLog are no longer needed as spdlog handles formatting.
+/*
+std::string Logger::getDateTimeString() { ... }
+std::string Logger::formatLog(int logLevel, std::string msg) { ... }
+*/
 
 void Logger::log(int logLevel, std::string msg)
 {
-	std::string str = formatLog(logLevel, msg);
-
-	fprintf(stderr, "%s\n", str.c_str());
+    // spdlog's default logger is already set up in main.cpp
+    // It includes timestamp, level, thread ID.
+    // We just need to map our LogLevel to spdlog's levels.
+    switch (logLevel) {
+        case LogLevel::Info:
+            spdlog::info(msg);
+            break;
+        case LogLevel::Error:
+            spdlog::error(msg);
+            break;
+        case LogLevel::Debug:
+            spdlog::debug(msg);
+            break;
+        case LogLevel::Warning: // Assuming spdlog::warn exists
+            spdlog::warn(msg);
+            break;
+        default:
+            // Handle unknown log level, perhaps log as info or warning
+            spdlog::warn("Unknown log level ({}): {}", logLevel, msg);
+            break;
+    }
 }
 
 void Logger::setLogFile(std::string path)
 {
-
+    // This function is currently a no-op.
+    // If file logging is desired with spdlog, it should be configured
+    // in SetupGlobalLogging() in main.cpp by adding a file sink.
+    // For example:
+    // auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(path, true);
+    // spdlog::default_logger()->sinks().push_back(file_sink);
+    // Or create a new logger for the file:
+    // auto file_logger = spdlog::basic_logger_mt("file_logger", path);
+    // file_logger->info("This message goes to file");
+    //
+    // For now, this C++ Logger class won't manage spdlog sinks directly.
+    // That's centralized in main.cpp's SetupGlobalLogging.
+    spdlog::info("Logger::setLogFile called with path '{}', but spdlog file sink setup is centralized.", path);
 }

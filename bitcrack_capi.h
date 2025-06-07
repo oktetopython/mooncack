@@ -49,8 +49,8 @@ BITCRACK_API int bitcrack_is_search_running(BitCrackSession session); // Returns
 
 BITCRACK_API void bitcrack_set_result_callback(BitCrackSession session, PFN_BitCrackResultCallback callback, void* user_data);
 
-// Optional: Polling for results if callback is not desired by C API user
-// BITCRACK_API int bitcrack_poll_results(BitCrackSession session, BitCrackFoundKeyC* out_results, int max_results_to_fetch, int* num_results_fetched);
+// Polling for results
+BITCRACK_API int bitcrack_poll_results(BitCrackSession session, BitCrackFoundKeyC* out_results, int max_results_to_fetch, int* num_results_fetched);
 
 #ifdef __cplusplus
 } // extern "C"

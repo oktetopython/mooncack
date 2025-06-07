@@ -46,7 +46,11 @@ struct BitCrackSessionOpaque {
     // C-style callback and user data
     PFN_BitCrackResultCallback resultCallback_c;
     void* resultCallbackUserData_c;
-    std::mutex resultMutex_c; // To make C callback invocation thread-safe
+    std::mutex callback_mutex_c; // Renamed for clarity vs queue_mutex_c
+
+    // Result queue for polling
+    std::vector<BitCrackFoundKeyC> found_results_queue_c;
+    std::mutex queue_mutex_c;
 
     // Configuration for KeySearchDevice
     int blocks;
@@ -66,6 +70,9 @@ struct BitCrackSessionOpaque {
         searchRunningFlag(false),
         resultCallback_c(nullptr),
         resultCallbackUserData_c(nullptr),
+        // callback_mutex_c is default constructed
+        // queue_mutex_c is default constructed
+        // found_results_queue_c is default constructed (empty)
         blocks(0), threads(0), pointsPerThread(0),
         device_configured(false)
     {}
@@ -211,8 +218,14 @@ void internal_cpp_result_callback(KeySearchResult cpp_result, BitCrackSessionOpa
         c_result.is_compressed = cpp_result.compressed ? 1 : 0;
 
         // Lock mutex before calling C callback
-        std::lock_guard<std::mutex> lock(session->resultMutex_c);
+        std::lock_guard<std::mutex> lock(session->callback_mutex_c);
         session->resultCallback_c(&c_result, session->resultCallbackUserData_c);
+    }
+
+    // Also, add to the internal queue for polling
+    {
+        std::lock_guard<std::mutex> queue_lock(session->queue_mutex_c);
+        session->found_results_queue_c.push_back(c_result);
     }
 }
 
@@ -354,14 +367,41 @@ BITCRACK_API int bitcrack_is_search_running(BitCrackSession session) {
 
 BITCRACK_API void bitcrack_set_result_callback(BitCrackSession session, PFN_BitCrackResultCallback callback, void* user_data) {
     if (!session) return;
-    std::lock_guard<std::mutex> lock(session->resultMutex_c); // Ensure thread safety when setting callback
+    std::lock_guard<std::mutex> lock(session->callback_mutex_c); // Ensure thread safety when setting callback
     session->resultCallback_c = callback;
     session->resultCallbackUserData_c = user_data;
 }
 
-// BITCRACK_API int bitcrack_poll_results(...)
-// {
-//     // Implementation would involve a thread-safe queue or checking _results from KeyFinder if that's exposed.
-//     // For now, this is optional.
-//     return -1; // Not implemented
-// }
+BITCRACK_API int bitcrack_poll_results(BitCrackSession session, BitCrackFoundKeyC* out_results, int max_results_to_fetch, int* num_results_fetched)
+{
+    if (!session || !out_results || max_results_to_fetch <= 0 || !num_results_fetched) {
+        if(num_results_fetched) *num_results_fetched = 0;
+        return -1; // Invalid arguments
+    }
+
+    std::lock_guard<std::mutex> lock(session->queue_mutex_c);
+
+    int count_to_copy = 0;
+    if (session->found_results_queue_c.empty()) {
+        *num_results_fetched = 0;
+        return 0; // Success, no results
+    }
+
+    count_to_copy = static_cast<int>(session->found_results_queue_c.size());
+    if (count_to_copy > max_results_to_fetch) {
+        count_to_copy = max_results_to_fetch;
+    }
+
+    for (int i = 0; i < count_to_copy; ++i) {
+        out_results[i] = session->found_results_queue_c[i];
+    }
+
+    // Remove copied items from the front of the queue
+    session->found_results_queue_c.erase(
+        session->found_results_queue_c.begin(),
+        session->found_results_queue_c.begin() + count_to_copy
+    );
+
+    *num_results_fetched = count_to_copy;
+    return 0; // Success
+}

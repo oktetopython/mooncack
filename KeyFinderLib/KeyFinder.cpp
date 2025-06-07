@@ -18,7 +18,7 @@ void KeyFinder::defaultStatusCallback(KeySearchStatus status)
 	// Do nothing
 }
 
-KeyFinder::KeyFinder(const secp256k1::uint256 &startKey, const secp256k1::uint256 &endKey, int compression, KeySearchDevice* device, const secp256k1::uint256 &stride)
+KeyFinder::KeyFinder(const secp256k1::uint256 &startKey, const secp256k1::uint256 &endKey, int compression, KeySearchDevice* device, const secp256k1::uint256 &stride, int physicalDeviceIdParam)
 {
 	_total = 0;
 	_statusInterval = 1000;
@@ -37,6 +37,7 @@ KeyFinder::KeyFinder(const secp256k1::uint256 &startKey, const secp256k1::uint25
     _iterCount = 0;
 
     _stride = stride;
+    _physicalDeviceId = physicalDeviceIdParam; // Store the physical device ID
 
     _stopFlagPtr = nullptr; // Initialize new member
 }
@@ -224,6 +225,7 @@ void KeyFinder::run()
 			info.deviceName = _device->getDeviceName();
 			info.targets = _targets.size();
             info.nextKey = getNextKey();
+            info.physicalDeviceId = _physicalDeviceId; // Set the physical device ID
 
 			_statusCallback(info);
 

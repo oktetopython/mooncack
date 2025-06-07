@@ -33,6 +33,7 @@ private:
 	// Each index of each thread gets a flag to indicate if it found a valid hash
 	bool _running; // Existing running flag
     std::atomic<bool>* _stopFlagPtr; // New atomic stop flag pointer for C API control
+    int _physicalDeviceId; // Store the physical device ID for this KeyFinder instance
 
 	void(*_resultCallback)(KeySearchResult);
 	void(*_statusCallback)(KeySearchStatus);
@@ -47,7 +48,7 @@ private:
 
 public:
 
-    KeyFinder(const secp256k1::uint256 &startKey, const secp256k1::uint256 &endKey, int compression, KeySearchDevice* device, const secp256k1::uint256 &stride);
+    KeyFinder(const secp256k1::uint256 &startKey, const secp256k1::uint256 &endKey, int compression, KeySearchDevice* device, const secp256k1::uint256 &stride, int physicalDeviceId);
 
 	~KeyFinder();
 

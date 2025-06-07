@@ -1,0 +1,15 @@
+[package]
+name = "bitcrack_rs_bindings"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+# No specific runtime dependencies needed for the wrapper itself, beyond what std provides.
+# FFI calls are to the C library.
+
+[build-dependencies]
+bindgen = "0.60" # Check for the latest stable version of bindgen
+# For example, as of late 2023, 0.60 to 0.68 are common. Using a slightly older one for wider compatibility.
+# Users can update this version as needed.
