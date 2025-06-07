@@ -2,6 +2,7 @@
 #define _LOGGER_H
 
 #include <string>
+#include "spdlog/spdlog.h" // Include spdlog
 
 
 namespace LogLevel {

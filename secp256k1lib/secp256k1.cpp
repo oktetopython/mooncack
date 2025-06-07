@@ -2,11 +2,17 @@
 #include<stdio.h>
 #include<stdlib.h>
 #include"CryptoUtil.h"
+#include <mutex> // Added for std::mutex
 
 #include "secp256k1.h"
 
 
 using namespace secp256k1;
+
+// For fixed-window multiplication of G
+static secp256k1::ecpoint G_WINDOW_TABLE[1 << 4]; // Window size w=4, so 2^4 = 16 entries
+static bool G_WINDOW_TABLE_INITIALIZED = false;
+static std::mutex G_WINDOW_TABLE_MUTEX;
 
 static uint256 _ONE(1);
 static uint256 _ZERO;
@@ -712,6 +718,89 @@ ecpoint secp256k1::addPoints(const ecpoint &p1, const ecpoint &p2)
 
 	return sum;
 }
+
+// Helper function to extract a w-bit chunk from uint256 k
+// chunk_index is 0-indexed from LSB (chunk 0 is bits 0 to w-1)
+// Returns the value of the chunk.
+static unsigned int getValue(const uint256& k, int chunk_start_bit, int num_bits, int max_bits = 256)
+{
+    unsigned int val = 0;
+    for (int j = 0; j < num_bits; ++j) {
+        int bit_pos = chunk_start_bit + j;
+        if (bit_pos < max_bits && k.bit(bit_pos)) {
+            val |= (1 << j);
+        }
+    }
+    return val;
+}
+
+
+// Initialize the precomputation table for G
+// G_WINDOW_TABLE[i] will store i*G
+// w is the window size (default 4 bits)
+static void init_G_window_table_if_needed(int w = 4)
+{
+    if (G_WINDOW_TABLE_INITIALIZED) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(G_WINDOW_TABLE_MUTEX);
+    if (G_WINDOW_TABLE_INITIALIZED) {
+        return;
+    }
+
+    unsigned int table_size = 1U << w;
+    G_WINDOW_TABLE[0] = secp256k1::pointAtInfinity();
+    if (table_size > 1) {
+        G_WINDOW_TABLE[1] = secp256k1::G();
+    }
+    for (unsigned int i = 2; i < table_size; ++i) {
+        // G_WINDOW_TABLE[i] = i*G = (i-1)*G + G
+        G_WINDOW_TABLE[i] = secp256k1::addPoints(G_WINDOW_TABLE[i-1], secp256k1::G());
+    }
+
+    G_WINDOW_TABLE_INITIALIZED = true;
+}
+
+// Fixed-window multiplication for k*G
+// k: the scalar
+// w: window size in bits (e.g., 4 means 2^4 = 16 precomputed points)
+ecpoint secp256k1::multiplyPointG_fixedwindow(const uint256 &k, int w)
+{
+    if (k.isZero()) {
+        return pointAtInfinity();
+    }
+
+    init_G_window_table_if_needed(w);
+
+    ecpoint Q = pointAtInfinity();
+    int m = 256; // Bitlength of k (assumed to be 256 for secp256k1 private keys)
+    int t = (m + w - 1) / w; // Number of w-bit windows in k
+
+    // Iterate from the most significant window (index t-1) down to the least significant window (index 0)
+    for (int i = t - 1; i >= 0; i--) {
+        // Perform w doublings on Q (for Q from previous, higher-order window)
+        // For the very first iteration (i=t-1), Q is infinity, so doubling it w times is still infinity.
+        for (int d_loop = 0; d_loop < w; ++d_loop) {
+            Q = doublePoint(Q);
+        }
+
+        // Extract the i-th w-bit chunk from k.
+        // chunk_index i corresponds to bits [i*w, (i+1)*w - 1]
+        unsigned int k_i_val = getValue(k, i * w, w, m);
+
+        if (k_i_val != 0) { // G_WINDOW_TABLE[0] is infinity, adding it has no effect.
+            unsigned int table_idx_max = (1U << w);
+            if (k_i_val < table_idx_max) { // Boundary check for table access
+                 Q = addPoints(Q, G_WINDOW_TABLE[k_i_val]);
+            } else {
+                // This case should ideally not be reached if getValue and table indexing are correct.
+                // Consider an assertion or error logging if it occurs.
+            }
+        }
+    }
+    return Q;
+}
+
 
 ecpoint secp256k1::multiplyPoint(const uint256 &k, const ecpoint &p)
 {

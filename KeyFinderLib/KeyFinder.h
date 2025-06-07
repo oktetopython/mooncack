@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <vector>
 #include <set>
+#include <atomic> // Required for std::atomic<bool>
 #include "secp256k1.h"
 #include "KeySearchTypes.h"
 #include "KeySearchDevice.h"
@@ -30,7 +31,9 @@ private:
     secp256k1::uint256 _endKey;
 
 	// Each index of each thread gets a flag to indicate if it found a valid hash
-	bool _running;
+	bool _running; // Existing running flag
+    std::atomic<bool>* _stopFlagPtr; // New atomic stop flag pointer for C API control
+    int _physicalDeviceId; // Store the physical device ID for this KeyFinder instance
 
 	void(*_resultCallback)(KeySearchResult);
 	void(*_statusCallback)(KeySearchStatus);
@@ -45,7 +48,7 @@ private:
 
 public:
 
-    KeyFinder(const secp256k1::uint256 &startKey, const secp256k1::uint256 &endKey, int compression, KeySearchDevice* device, const secp256k1::uint256 &stride);
+    KeyFinder(const secp256k1::uint256 &startKey, const secp256k1::uint256 &endKey, int compression, KeySearchDevice* device, const secp256k1::uint256 &stride, int physicalDeviceId);
 
 	~KeyFinder();
 
@@ -56,6 +59,8 @@ public:
 	void setResultCallback(void(*callback)(KeySearchResult));
 	void setStatusCallback(void(*callback)(KeySearchStatus));
 	void setStatusInterval(uint64_t interval);
+
+    void setStopFlag(std::atomic<bool>* flag); // New method to set the stop flag
 
 	void setTargets(std::string targetFile);
 	void setTargets(std::vector<std::string> &targets);

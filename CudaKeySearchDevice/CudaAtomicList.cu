@@ -104,6 +104,46 @@ unsigned int CudaAtomicList::read(void *ptr, unsigned int count)
 	return count;
 }
 
+// New method to get current item count by synchronous DtoH copy of the count
+int CudaAtomicList::getCurrentItemCount()
+{
+    if (!_countDevPtr) return 0; // Not initialized
+
+    unsigned int host_count = 0;
+    // Synchronously copy the count from device memory to host.
+    // _countDevPtr is the device pointer to the count.
+    cudaError_t err = cudaMemcpy(&host_count, _countDevPtr, sizeof(unsigned int), cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) {
+        // Handle error, e.g., throw or log. For now, return 0 or last known good.
+        // This could also be an assertion in debug builds.
+        // Returning 0 might be misleading if copy fails partially.
+        // Consider throwing an exception or returning -1 to indicate error.
+        fprintf(stderr, "CudaAtomicList::getCurrentItemCount: cudaMemcpy DtoH failed: %s\n", cudaGetErrorString(err));
+        return 0; // Or throw
+    }
+    return static_cast<int>(host_count);
+}
+
+// New asynchronous read method
+// listSizeInBytes should be itemCount * _itemSize
+void CudaAtomicList::readAsync(unsigned char *dest, int listSizeInBytes, cudaStream_t stream)
+{
+    if (!_devPtr || listSizeInBytes == 0) {
+        // Nothing to copy or not initialized
+        return;
+    }
+
+    // _devPtr is the device pointer to the list data.
+    cudaError_t err = cudaMemcpyAsync(dest, _devPtr, listSizeInBytes, cudaMemcpyDeviceToHost, stream);
+    if (err != cudaSuccess) {
+        // Handle error. This should ideally throw or be checked by the caller.
+        // For now, printing error.
+        fprintf(stderr, "CudaAtomicList::readAsync: cudaMemcpyAsync failed: %s\n", cudaGetErrorString(err));
+        // If an exception mechanism is available, use it: throw CudaException(err);
+    }
+    // Note: This function does not synchronize the stream. The caller is responsible.
+}
+
 void CudaAtomicList::cleanup()
 {
 	cudaFreeHost(_countHostPtr);

@@ -56,7 +56,7 @@ private:
 
     CudaHashLookup _targetLookup;
 
-    void getResultsInternal();
+    // void getResultsInternal(); // Removed
 
     // std::vector<hash160> _targets; // Old
     std::unordered_set<hash160, Hash160Hasher> _targets; // New
@@ -71,9 +71,28 @@ private:
 
     bool verifyKey(const secp256k1::uint256 &privateKey, const secp256k1::ecpoint &publicKey, const unsigned int hash[5], bool compressed);
 
+    // CUDA Streams
+    cudaStream_t kernelStream;
+    cudaStream_t memcpyStream;
+
+    // CUDA Event for kernel completion
+    cudaEvent_t kernelDoneEvent; // Renamed from kernelDoneEvent_d for consistency if this is the same event
+                                 // Or if it's different, then kernelDoneEvent_d was correct.
+                                 // The subtask said kernelDoneEvent_d, so I'll stick to that if it's distinct.
+                                 // Re-reading: kernelDoneEvent is for kernel, memcpyDoneEvent_d for memcpy. So kernelDoneEvent is correct.
+
+    // Double buffer and sync for async DtoH copy and processing
+    std::vector<unsigned char> resultsProcessingBuffer_h; // Host buffer for CPU to process results
+    std::vector<unsigned char> resultsDtoHBuffer_h;       // Host buffer for async DtoH copy
+    cudaEvent_t memcpyDoneEvent_d;                      // Event to signal DtoH completion
+    bool dtoHCopyInProgress_f;                          // Flag indicating a DtoH copy is outstanding
+    int itemsInProcessingBuffer_i;                      // Number of items in resultsProcessingBuffer_h
+    int itemsInDtoHBuffer_i;                            // Number of items copied into resultsDtoHBuffer_h
+
 public:
 
     CudaKeySearchDevice(int device, int threads, int pointsPerThread, int blocks = 0);
+    ~CudaKeySearchDevice(); // Destructor for stream cleanup
 
     virtual void init(const secp256k1::uint256 &start, int compression, const secp256k1::uint256 &stride);
 

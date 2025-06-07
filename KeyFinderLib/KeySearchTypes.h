@@ -58,6 +58,7 @@ typedef struct {
     uint64_t deviceMemory;
     uint64_t targets;
     secp256k1::uint256 nextKey;
+    int physicalDeviceId; // Added for multi-GPU progress tracking
 }KeySearchStatus;
 
 

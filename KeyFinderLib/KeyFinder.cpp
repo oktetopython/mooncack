@@ -18,7 +18,7 @@ void KeyFinder::defaultStatusCallback(KeySearchStatus status)
 	// Do nothing
 }
 
-KeyFinder::KeyFinder(const secp256k1::uint256 &startKey, const secp256k1::uint256 &endKey, int compression, KeySearchDevice* device, const secp256k1::uint256 &stride)
+KeyFinder::KeyFinder(const secp256k1::uint256 &startKey, const secp256k1::uint256 &endKey, int compression, KeySearchDevice* device, const secp256k1::uint256 &stride, int physicalDeviceIdParam)
 {
 	_total = 0;
 	_statusInterval = 1000;
@@ -37,6 +37,9 @@ KeyFinder::KeyFinder(const secp256k1::uint256 &startKey, const secp256k1::uint25
     _iterCount = 0;
 
     _stride = stride;
+    _physicalDeviceId = physicalDeviceIdParam; // Store the physical device ID
+
+    _stopFlagPtr = nullptr; // Initialize new member
 }
 
 KeyFinder::~KeyFinder()
@@ -143,6 +146,14 @@ void KeyFinder::init()
 void KeyFinder::stop()
 {
 	_running = false;
+    if (_stopFlagPtr) {
+        _stopFlagPtr->store(true, std::memory_order_relaxed);
+    }
+}
+
+void KeyFinder::setStopFlag(std::atomic<bool>* flag)
+{
+    _stopFlagPtr = flag;
 }
 
 void KeyFinder::removeTargetFromList(const unsigned int hash[5])
@@ -174,6 +185,12 @@ void KeyFinder::run()
 	_totalTime = 0;
 
 	while(_running) {
+        // Check the stop flag at the beginning of each iteration
+        if (_stopFlagPtr && _stopFlagPtr->load(std::memory_order_relaxed)) {
+            Logger::log(LogLevel::Info, "KeyFinder::run: Stop signal received, terminating search loop.");
+            _running = false; // Ensure existing _running flag is also set to false to break loop
+            continue; // Skip to loop condition check
+        }
 
         _device->doStep();
         _iterCount++;
@@ -208,6 +225,7 @@ void KeyFinder::run()
 			info.deviceName = _device->getDeviceName();
 			info.targets = _targets.size();
             info.nextKey = getNextKey();
+            info.physicalDeviceId = _physicalDeviceId; // Set the physical device ID
 
 			_statusCallback(info);
 

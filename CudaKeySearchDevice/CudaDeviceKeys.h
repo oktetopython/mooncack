@@ -25,13 +25,11 @@ private:
 
 	unsigned int *_devPrivate;
 
-	unsigned int *_devChain;
+	// unsigned int *_devChain; // Removed
 
-	unsigned int *_devBasePointX;
-
-	unsigned int *_devBasePointY;
-
-	int _step;
+	// unsigned int *_devBasePointX; // Already Removed
+	// unsigned int *_devBasePointY; // Already Removed
+	// int _step; // Already Removed
 
 	int getIndex(int block, int thread, int idx);
 
@@ -39,11 +37,11 @@ private:
 
 	secp256k1::uint256 readBigInt(unsigned int *src, int block, int thread, int idx);
 
-	cudaError_t allocateChainBuf(unsigned int count);
+	// cudaError_t allocateChainBuf(unsigned int count); // Removed
 
 	cudaError_t initializePublicKeys(size_t count);
 
-	cudaError_t initializeBasePoints();
+	// cudaError_t initializeBasePoints(); // Removed
 
 
 public:
@@ -54,10 +52,10 @@ public:
 		_devX = NULL;
 		_devY = NULL;
 		_devPrivate = NULL;
-		_devChain = NULL;
-		_devBasePointX = NULL;
-		_devBasePointY = NULL;
-		_step = 0;
+		// _devChain = NULL; // Removed
+		// _devBasePointX = NULL; // Already Removed
+		// _devBasePointY = NULL; // Already Removed
+		// _step = 0; // Already Removed
 	}
 
 	~CudaDeviceKeys()
@@ -70,7 +68,7 @@ public:
 
 	bool selfTest(const std::vector<secp256k1::uint256> &privateKeys);
 
-	cudaError_t doStep();
+	// cudaError_t doStep(); // Removed
 
 	void clearPrivateKeys();
 

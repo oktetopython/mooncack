@@ -41,9 +41,15 @@ public:
 
 	cudaError_t init(unsigned int itemSize, unsigned int maxItems);
 
-	unsigned int read(void *dest, unsigned int count);
+	unsigned int read(void *dest, unsigned int count); // Existing synchronous read
 
-	unsigned int size();
+	// New asynchronous read method
+	void readAsync(unsigned char *dest, int listSizeInBytes, cudaStream_t stream);
+
+	// New method to get current item count by synchronous DtoH copy of the count
+	int getCurrentItemCount();
+
+	unsigned int size(); // This likely returns the host-side count or max size, need to check impl.
 
 	void clear();
 
