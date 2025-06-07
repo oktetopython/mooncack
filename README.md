@@ -47,7 +47,7 @@ This version of BitCrack includes numerous enhancements:
 1.  **Clone the Repository:**
     ```bash
     git clone https://github.com/oktetopython/mooncack.git # Or your fork/source location
-    cd BitCrack
+    cd mooncack
     ```
 
 2.  **Configure with CMake:**
@@ -119,7 +119,7 @@ The Python module also has install rules to place it into a Python `site-package
 
 ## Running BitCrack
 
-The main command-line interface (CLI) executable is `cuBitCrack` (for CUDA devices) or `clBitCrack` (for OpenCL devices), typically found in the `build/KeyFinder/Release` directory after compilation, or in your system path if installed.
+The main command-line interface (CLI) executable is `cuBitCrack` (for CUDA devices) or `clBitCrack` (for OpenCL devices), typically found in the `build/bin/` directory after compilation (e.g., `build/bin/cuBitCrack`, or `build/bin/Release/cuBitCrack.exe` on Windows if using a multi-configuration generator like Visual Studio), or in your system path if installed.
 
 ### Command-Line Options
 
@@ -387,7 +387,7 @@ Send any questions or comments to bitcrack.project@gmail.com
 1.  **克隆代码仓库:**
     ```bash
     git clone https://github.com/oktetopython/mooncack.git # 或您的 fork/源码位置
-    cd BitCrack
+    cd mooncack
     ```
 
 2.  **使用 CMake 配置项目:**
@@ -459,7 +459,7 @@ Python 模块也有安装规则, 会将其放置到 Python `site-packages` 目�
 
 ## 运行 BitCrack
 
-主命令行界面 (CLI) 可执行文件是 `cuBitCrack` (适用于 CUDA 设备), 或 `clBitCrack` (适用于 OpenCL 设备), 编译后通常位于 `build/KeyFinder/Release` 目录中, 如果已安装则可能在您的系统路径中.
+主命令行界面 (CLI) 可执行文件是 `cuBitCrack` (适用于 CUDA 设备), 或 `clBitCrack` (适用于 OpenCL 设备), 编译后通常位于 `build/bin/` 目录中 (例如, Linux 下的 `build/bin/cuBitCrack`, 或在使用 Visual Studio 等多配置生成器时的 Windows 下的 `build/bin/Release/cuBitCrack.exe`), 如果已安装则可能在您的系统路径中.
 
 ### 命令行选项
 
