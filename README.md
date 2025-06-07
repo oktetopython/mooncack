@@ -46,7 +46,7 @@ This version of BitCrack includes numerous enhancements:
 
 1.  **Clone the Repository:**
     ```bash
-    git clone https://github.com/brichard19/BitCrack.git # Or your fork/source location
+    git clone https://github.com/oktetopython/mooncack.git # Or your fork/source location
     cd BitCrack
     ```
 
@@ -386,7 +386,7 @@ Send any questions or comments to bitcrack.project@gmail.com
 
 1.  **克隆代码仓库:**
     ```bash
-    git clone https://github.com/brichard19/BitCrack.git # 或您的 fork/源码位置
+    git clone https://github.com/oktetopython/mooncack.git # 或您的 fork/源码位置
     cd BitCrack
     ```
 
