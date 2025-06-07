@@ -327,17 +327,6 @@ kernel to run longer, but more keys will be processed.
 
 ### Supporting this project
 
-If you find this project useful and would like to support it, consider making a donation. Your support is greatly appreciated!
-
-**BTC**: `1LqJ9cHPKxPXDRia4tteTJdLXnisnfHsof`
-
-**LTC**: `LfwqkJY7YDYQWqgR26cg2T1F38YyojD67J`
-
-**ETH**: `0xd28082CD48E1B279425346E8f6C651C45A9023c5`
-
-### Contact
-
-Send any questions or comments to bitcrack.project@gmail.com
 
 <hr/>
 <a name="chinese-version"></a>
@@ -662,15 +651,3 @@ GPU 包含许多核心。核心的工作被划分为块（blocks），每个块�
 `Keys per thread:` 每个线程将处理的密钥数量。性能（密钥/秒）随此值渐近增加。默认值为256。增加此值将导致内核运行时间更长，但会处理更多密钥。
 
 ### 支持本项目
-
-如果您觉得这个项目有用并希望支持它，请考虑捐赠。非常感谢您的支持！
-
-**BTC**: `1LqJ9cHPKxPXDRia4tteTJdLXnisnfHsof`
-
-**LTC**: `LfwqkJY7YDYQWqgR26cg2T1F38YyojD67J`
-
-**ETH**: `0xd28082CD48E1B279425346E8f6C651C45A9023c5`
-
-### 联系方式
-
-如有任何问题或意见，请发送邮件至 bitcrack.project@gmail.com
